@@ -1,0 +1,555 @@
+---
+title: "Article Glucosinolates"
+author: "Laurie Magnin"
+date: "2024-04-11"
+output: html_document
+---
+
+To dive into the host plant-insect interaction, we applied a two-phase analysis approach (inspired by Gonzalez et al., 2020; Gray et al., 2024). We first tested specific direct hypotheses about the relationships among the treatments (the varieties and cultural system), the OSR plant traits (morphology and glucosinolate) and the larval infestation of P. chrysocephala. Secondly, we conducted a regularized path analysis with a structural equation model (Lavaan and regsem package) to explore the causalities in our system. All the data analysis was done on R version 4.4.1 (2024-10-10).
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library ('glmmTMB')
+library(DHARMa)
+library(car)
+library(emmeans)
+library(ggplot2)
+library(ggpubr)
+library(broom)
+library(rstatix)
+library(tidyr)
+
+data_2023 <- readRDS("~/working/4_Glucosinolates_2022/3-Script/Article_Gluco/data_2023.rds")
+head(data_2023)
+
+```
+
+# 1. Treatments effect on larval infestation   
+
+A generalized linear mixed model (glmmTMB package) was used to assess the effect of varieties, cultural systems and their interaction on larval count, while accounting for block variability. The model assumed a negative binomial distribution. The model fit was assessed with the DHARMa package. A Wald test on the generated models allowed the assessment of the effect (car package), followed by pairwise comparisons of estimated marginal means with Bonferroni adjustment (emmeans package) in case of significant Wald test (P < 0.05).
+
+## 1.1. Number of larvae
+### 1.1.1 Model and Diagnostics
+
+```{r model.1.1.1, echo=FALSE, message=FALSE}
+
+mymodel<- glmmTMB(Larvae.NB ~  Variety*Cropping.sys + (1|bloc), data= data_2023, family = nbinom2)
+
+summary(mymodel)
+
+n_sim <- 500
+
+simulationOutput <- simulateResiduals(fittedModel = mymodel, n = n_sim)
+plot(simulationOutput, asFactor = F)
+
+testDispersion(simulationOutput)
+
+plot(simulationOutput, form = data_2023$Variety)
+
+```
+
+### 1.1.2 Model output
+
+```{r model output, echo=FALSE, message=FALSE, warning=FALSE}
+
+Anova(mymodel, type=3)
+emmeans(mymodel, list(pairwise ~ Variety*Cropping.sys), adjust = "bonferroni")
+
+emm<-emmeans(mymodel, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot <- ggplot(emm, aes(x =response , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size= 3, alpha = 1) + 
+  geom_linerange(aes(xmin = asymp.LCL, xmax = asymp.UCL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.30) + 
+  labs(x = "Number of P. chrysocephala larva for 3 plants", y = "Variety")+
+  scale_color_manual(values = c("blue","orange" ), name = "", labels = c("Intercropping", "Monocropping")) + 
+  theme_classic() + coord_flip()
+
+plot1 <- plot +  theme(legend.direction = "horizontal", legend.position="top")
+
+plot1
+
+```
+
+# 2. Relationships between OSR plant traits and larval infestation
+
+A Pearson correlation analysis was conducted to examine the relationships between the larval infestation responses (number of larvae and ratio of larvae/g of fresh plant) with the variable of the OSR plant. The correlation coefficients were calculated with the Pearson method using the stats package. Additionally, the Hmisc package was used to compute the correlation matrix along with associated p-values for each pairwise comparison.
+
+```{r setup.2, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library('Hmisc')
+library(dplyr)
+
+
+# Subsetting column for correlation analysis ####
+data_2023_matrix<-subset(data_2023, select = - bloc )
+data_2023_matrix<-subset(data_2023_matrix, select = -X. )
+data_2023_matrix<-subset(data_2023_matrix, select = -Variety )
+data_2023_matrix<-subset(data_2023_matrix, select = -Cropping.sys )
+data_2023_matrix<-subset(data_2023_matrix, select = - Echantillon )
+data_2023_matrix<-subset(data_2023_matrix, select = -Modality )
+data_2023_matrix<-subset(data_2023_matrix, select = - Sample.ID )
+
+```
+
+
+```{r model.2, echo=FALSE, message=FALSE}
+
+correlation <- rcorr(as.matrix(data_2023_matrix))
+
+correlation_R <- correlation$r
+correlation_P <- correlation$P
+
+
+correlation_R<-as.data.frame(correlation_R)
+correlation_P<-as.data.frame(correlation_P)
+
+corr_Larvae <- select(correlation_P)
+corr_Larvae$R_Pearson_LarvaeNB <- paste(correlation_R$Larvae.NB)
+corr_Larvae$P_Pearson_LarvaeNB <- paste(correlation_P$Larvae.NB)
+
+library(knitr)
+
+kable(corr_Larvae, caption = "Pearson correlation Coefficients and P-values for NB of larvae and NB larvae/g plant")
+
+```
+
+# 3. Treatments effect on OSR plant traits 
+
+The OSR plant variables significantly correlated with the larval infestation responses in the previous analysis (2.1.1.2) were selected for this one. The effect of varieties, cultural systems and their interaction on selected OSR traits variables were analyzed via ANCOVA with the block as random factor (rstatix package).  To satisfy ANOVA assumptions the fresh weight and the glucoraphanin concentration were log transformed. 
+
+```{r setup.3, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library (broom)
+library(rstatix)
+library(ggplot2)
+library(emmeans)
+
+```
+
+## 3.1 Fresh weight 
+### 3.1.1 Model and Diagnostics
+
+```{r model.3.1, echo=FALSE, message=FALSE}
+
+model <- lm(log(Fresh.weight) ~ bloc + Variety*Cropping.sys , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+
+```
+
+### 3.1.2 Model output
+
+```{r model output.3.1, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023$log_poids_frais <- log(data_2023$Fresh.weight)
+
+data_2023  %>% anova_test(log_poids_frais ~ bloc + Variety*Cropping.sys)
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+pwc
+```
+
+### 3.1.3 Result figure and effect 
+
+```{r results.3.1, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_poid <- ggplot(emm, aes(x =response , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Fresh weight of three plants (g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+Weight <- plot_poid +  theme( legend.position="none")
+
+Weight
+
+```
+
+## 3.2 Total gluco 
+### 3.2.1 Model and Diagnostics
+
+```{r model.3.2, echo=FALSE, message=FALSE}
+
+model <- lm(Total.GS ~ bloc + Variety*Cropping.sys  , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+
+```
+
+### 3.2.2 Model output
+
+```{r model output.3.2, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023  %>% anova_test(Total.GS ~ bloc + Variety*Cropping.sys )
+
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+
+pairwise <- pwc$contrasts
+
+pairwise
+```
+
+### 3.2.3 Result figure and effect 
+
+```{r results.3.2, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_total <- ggplot(emm, aes(x =emmean , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Glucosinolates Total  (ug/g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+total <- plot_total +  theme( legend.position="none")
+
+total
+
+```
+
+## 3.3 Glucoraphanin 
+### 3.3.1 Model and Diagnostics
+
+```{r model.3.3, echo=FALSE, message=FALSE}
+
+model <- lm(log(Glucoraphanin+1) ~ bloc + Variety*Cropping.sys  , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+
+data_2023$log_Glucoraphanin <- log(data_2023$Glucoraphanin)
+
+```
+
+### 3.3.2 Model output
+
+```{r model output.3.3, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023$log_Glucoraphanin <- log(data_2023$Glucoraphanin+1)
+
+data_2023  %>% anova_test(log_Glucoraphanin ~ bloc + Variety*Cropping.sys )
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+
+pairwise <- pwc$contrasts
+
+pairwise
+
+```
+
+### 3.3.3 Result figure and effect 
+
+```{r results.3.3, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_Glucoraphanin <- ggplot(emm, aes(x =response , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Glucoraphanin  (ug/g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+Glucoraphanin <- plot_Glucoraphanin +  theme( legend.position="none")
+
+Glucoraphanin
+
+```
+
+## 3.4 Glucobrassicin
+### 3.4.1 Model and Diagnostics
+
+```{r model.3.4, echo=FALSE, message=FALSE}
+
+model <- lm(Glucobrassicin ~ bloc + Variety*Cropping.sys  , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+```
+
+### 3.4.2 Model output
+
+```{r model output.3.4, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023  %>% anova_test(Glucobrassicin ~ bloc + Variety*Cropping.sys )
+
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+
+pairwise <- pwc$contrasts
+
+pairwise
+```
+
+### 3.4.3 Result figure and effect 
+
+```{r results.3.4, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_Glucobrassicin <- ggplot(emm, aes(x =emmean , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Glucobrassicin  (ug/g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+Glucobrassicin <- plot_Glucobrassicin +  theme( legend.position="none")
+
+Glucobrassicin
+
+```
+
+## 3.5 Glucobrassicanapin
+### 3.5.1 Model and Diagnostics
+
+```{r model.3.5, echo=FALSE, message=FALSE}
+
+model <- lm(Glucobrassicanapin ~ bloc + Variety*Cropping.sys  , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+
+```
+
+### 3.5.2 Model output
+
+```{r model output.3.5, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023  %>% anova_test(Glucobrassicanapin ~ bloc + Variety*Cropping.sys )
+
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+
+pairwise <- pwc$contrasts
+
+pairwise
+
+```
+
+### 3.5.3 Result figure and effect 
+
+```{r results.3.5, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_Glucobrassicanapin <- ggplot(emm, aes(x =emmean , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Glucobrassicanapin  (ug/g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+Glucobrassicanapin <- plot_Glucobrassicanapin +  theme( legend.position="none")
+
+Glucobrassicanapin
+
+```
+
+## 3.7 Butyl-glucosinolate 
+### 3.7.1 Model and Diagnostics
+
+```{r model.3.7, echo=FALSE, message=FALSE}
+
+model <- lm(log(Butyl.GS+1) ~ bloc + Variety*Cropping.sys  , data=data_2023) #calculer le model, la covariable passe en premier 
+
+model.metrics <- augment(model) 
+
+qqnorm(model.metrics$.resid)
+qqline(model.metrics$.resid)
+
+#Homogénéité des variances 
+
+Leven.test<- model.metrics %>% levene_test(.resid ~ Variety*Cropping.sys) #OK 
+Leven.test 
+
+```
+
+### 3.7.2 Model output
+
+```{r model output.3.7, echo=FALSE, message=FALSE, warning=FALSE}
+
+data_2023$log_Butyl.GS <- log(data_2023$Butyl.GS+1)
+
+data_2023  %>% anova_test(log_Butyl.GS  ~ bloc + Variety*Cropping.sys )
+
+
+pwc <- 
+  emmeans(model,pairwise~Variety*Cropping.sys)
+
+pairwise <- pwc$contrasts
+
+pairwise
+
+```
+
+### 3.7.3 Result figure and effect 
+
+```{r results.3.7, echo=FALSE, , message=FALSE}
+
+emm<-emmeans(model, ~ Variety*Cropping.sys, type = 'response')
+
+emm<-as.data.frame(emm)
+
+plot_Butyl <- ggplot(emm, aes(x =response , y = Variety, color = Cropping.sys)) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = lower.CL, xmax = upper.CL),position = position_dodge(width = 0.5),size = 4, alpha=0.3) + 
+  scale_color_manual(values = c("blue","orange"), name = "", labels = c("Intercropping", "Monocropping")) + 
+  labs(x = "Butyl glucosinolate  (ug/g)", y = "Variety") + 
+  theme_classic() + coord_flip()
+
+Butyl <- plot_Butyl+  theme( legend.position="none")
+
+Butyl
+
+```
+
+
+
+# 4.Path analysis via structural equation modelling
+
+A path analysis with a structural equation model (SEM) was conducted with the Lavaan package. The categorical variable variety was transformed to a set of two dummy variables (Variety2 and Variety3). The weight of fresh plants, the Butyl-glucosinolate and the Glucoraphanin were log transformed to comply with SEM requirements. All quantitative variables were standardized to a mean of zero and a standard deviation of one to obtain comparable estimators. First, a model encompassing all possible path (Arrow A, B and C of Fig. 1) was specified as in "RegSEM_Analsyis.R" with the lavaan package. 
+
+Then, a regularized SEM approach was applied with the LASSO (Least Absolute Shrinkage and Selection Operator) technique from the regsem package (REF). This method allowed to address multicollinearity and enhance model interpretability by shrinking less relevant coefficients to zero. The regularization parameter (lambda) was selected based on the minimum Bayesian Information Criterion (BIC).
+To assess the stability of parameter estimates, we performed a bootstrapping procedure with 600 iterations. In each iteration, a bootstrap sample was drawn with replacement from the dataset, and the SEM model was refitted. A LASSO-regularized SEM (lambda = 0.07) was then applied to each bootstrap sample. The estimates from each bootstrap sample analysis were extracted and combined to produce a dataset summarizing their distribution. This approach provided insight into the variability and central tendency of the relationships between variables.
+
+
+```{r setup.4, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(lavaan)
+library(semPlot)
+library(car)
+
+q_est_df <- readRDS("~/working/4_Glucosinolates_2022/3-Script/Article_Gluco/Quantil_estimates.rds")
+
+```
+
+The first model investigated the relationships between plant varieties, cultural system, specific glucosinolates concentrations, OSR plant morphological traits and the number of P. chrysocephala larvae. The number of larvae for three pooled plants were transformed into six ordered level in a categorical variable (level1: 0 larvae; level2: 1 larva; level3: 2 larvae; level4: 3 to 7 larvae; level5: 7 to 12 larvae; level6: more than 12 larvae). The Diagonally Weighted Least Squares (DWLS) estimator was used, appropriate for handling ordinal data. 
+
+```{r model_Output.4.1, echo=FALSE, , message=FALSE}
+
+
+q_est_df <- q_est_df %>%
+  mutate(Path = Variable) %>%
+  separate(col = Variable, into = c("Var1", "Var2"), sep = "\\.\\.\\.")
+
+q_est_A <- q_est_df[1:19,]
+
+kable(q_est_A, caption = "Estimates for the direct path (arrow A and C of the figure 1) between treatments, plant-traits measured variables and the number of larvae per plant")
+
+plot_model_1 <- ggplot(q_est_A, aes(x =Median , y = reorder(Path , Median))) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = X2.5., xmax = X97.5.),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  labs(x = "Estimates", y = "Path") + geom_vline(xintercept = 0, linetype="dashed", color = "red", linewidth=1)+ 
+  theme_classic()
+
+plot1 <- plot_model_1  +  theme(legend.direction = "horizontal", legend.position="top")
+
+plot1
+
+q_est_B <- subset (q_est_df, q_est_df$Var1 == "Variety2")
+
+kable(q_est_B, caption = "Estimates for the path between the variety 2 and the plant-traits measured variables (Fig. 1. arrow B)")
+
+plot_model_1 <- ggplot(q_est_B, aes(x =Median , y = reorder(Path , Median))) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = X2.5., xmax = X97.5.),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  labs(x = "Estimates", y = "Path") + geom_vline(xintercept = 0, linetype="dashed", color = "red", linewidth=1)+ 
+  theme_classic()
+
+plot2 <- plot_model_1  +  theme(legend.direction = "horizontal", legend.position="top")
+
+plot2
+
+q_est_C <- subset (q_est_df, q_est_df$Var1 == "Variety3")
+
+kable(q_est_C, caption = "Estimates for the path between the variety 3 and the plant-traits measured variables (Fig. 1. arrow B)")
+
+plot_model_1 <- ggplot(q_est_C, aes(x =Median , y = reorder(Path , Median))) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = X2.5., xmax = X97.5.),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  labs(x = "Estimates", y = "Path") + geom_vline(xintercept = 0, linetype="dashed", color = "red", linewidth=1)+ 
+  theme_classic()
+
+plot3 <- plot_model_1  +  theme(legend.direction = "horizontal", legend.position="top")
+
+plot3
+
+q_est_D <- subset (q_est_df, q_est_df$Var1 == "Cropping.sys")
+kable(q_est_D, caption = "Estimates for the path between the cropping system treatment and the plant-traits measured variables (Fig. 1. arrow B)")
+
+plot_model_1 <- ggplot(q_est_D, aes(x =Median , y = reorder(Path , Median))) + 
+  geom_point(position = position_dodge(width = 0.5), size=3, alpha = 1) + 
+  geom_linerange(aes(xmin = X2.5., xmax = X97.5.),position = position_dodge(width = 0.5),linewidth = 4, alpha=0.3) + 
+  labs(x = "Estimates", y = "Path") + geom_vline(xintercept = 0, linetype="dashed", color = "red", linewidth=1)+ 
+  theme_classic()
+
+plot4 <- plot_model_1  +  theme(legend.direction = "horizontal", legend.position="top")
+
+plot4
+
+```
